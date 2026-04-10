@@ -192,6 +192,32 @@
     </div>
   </div>
 
+  <!-- Firma -->
+  <div class="card">
+    <div class="card-header">✍️ Tu Firma Digital</div>
+    <div class="card-body">
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <button class="btn-add" style="width:auto; padding:9px 18px;"
+                onclick="document.getElementById('firma-input').click()">
+          📂 Seleccionar firma (PNG/JPG)
+        </button>
+        <span id="firma-nombre" style="color:var(--txt2); font-size:0.85rem; font-style:italic;">
+          Sin seleccionar
+        </span>
+        <input type="file" id="firma-input" accept="image/png,image/jpeg"
+               style="display:none" onchange="cargarFirma(this)">
+      </div>
+      <!-- Preview de la firma -->
+      <div id="firma-preview" style="display:none; margin-top:12px;">
+        <img id="firma-img" style="max-height:80px; max-width:250px;
+             border:1px solid var(--bord); border-radius:7px; padding:6px; background:white;">
+        <button onclick="quitarFirma()" style="margin-left:10px; background:var(--red);
+                color:white; border:none; border-radius:5px; padding:4px 10px;
+                cursor:pointer; font-size:0.8rem;">✕ Quitar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Transporte -->
   <div class="card">
     <div class="card-header">🚌 Transporte</div>
@@ -231,7 +257,31 @@
 <div id="toast"></div>
 
 <script>
-var filaCount = 0;
+var firmaBase64 = null;
+
+function cargarFirma(input) {
+  var file = input.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    firmaBase64 = e.target.result;
+    document.getElementById("firma-nombre").textContent = "✅ " + file.name;
+    document.getElementById("firma-nombre").style.color = "var(--green)";
+    document.getElementById("firma-img").src = firmaBase64;
+    document.getElementById("firma-preview").style.display = "block";
+  };
+  reader.readAsDataURL(file);
+}
+
+function quitarFirma() {
+  firmaBase64 = null;
+  document.getElementById("firma-input").value = "";
+  document.getElementById("firma-nombre").textContent = "Sin seleccionar";
+  document.getElementById("firma-nombre").style.color = "var(--txt2)";
+  document.getElementById("firma-preview").style.display = "none";
+}
+
+
 var transpActual = "OMNIBUS";
 var pppActual = 3;
 
@@ -331,6 +381,7 @@ function generar() {
     fecha_emision: fecha,
     transporte: transpActual,
     por_pagina: pppActual,
+    firma_base64: firmaBase64,
     filas: filas
   };
 
