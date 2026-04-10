@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="theme-color" content="#1B3F6E">
+<title>Planilla de Movilidad - METASIL</title>
+<style>
+  :root {
+    --az:#1B3F6E; --az2:#2B5EA7; --gold:#C8A84B;
+    --bg:#F4F6FA; --card:#FFFFFF; --bord:#D0D7E3;
+    --txt:#1A1A2E; --txt2:#5A6478; --green:#1E7F4E; --red:#C0392B;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'Segoe UI',sans-serif; background:var(--bg); color:var(--txt); }
+
+  header { background:var(--az); position:sticky; top:0; z-index:100; box-shadow:0 2px 8px #0004; }
+  .hdr-gold { background:var(--gold); height:4px; }
+  .hdr-inner { display:flex; align-items:center; gap:12px; padding:12px 16px; }
+  .hdr-inner img { height:36px; }
+  .hdr-title h1 { color:var(--gold); font-size:1rem; font-weight:700; }
+  .hdr-title p  { color:#ffffffaa; font-size:0.75rem; }
+
+  main { max-width:700px; margin:0 auto; padding:16px; }
+
+  .card { background:var(--card); border:1px solid var(--bord); border-radius:10px; margin-bottom:16px; overflow:hidden; }
+  .card-header { background:var(--az); color:white; padding:10px 14px; font-size:0.85rem; font-weight:600; }
+  .card-body { padding:14px; }
+
+  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .field { display:flex; flex-direction:column; gap:4px; }
+  .field label { font-size:0.75rem; color:var(--txt2); font-weight:600; }
+  .field input, .field select {
+    padding:9px 10px; border:1px solid var(--bord); border-radius:7px;
+    font-size:0.9rem; background:#F7F9FC; color:var(--txt); width:100%;
+  }
+  .field input:focus { outline:none; border-color:var(--az2); box-shadow:0 0 0 2px #2B5EA722; }
+  .recibo-badge {
+    display:inline-block; background:#E8F0FE; color:var(--az);
+    font-weight:700; font-size:1.1rem; padding:8px 14px;
+    border-radius:7px; border:1px solid var(--az2); min-width:60px; text-align:center;
+  }
+
+  .radio-group { display:flex; flex-wrap:wrap; gap:8px; }
+  .radio-btn {
+    display:flex; align-items:center; gap:6px;
+    background:#F0F5FF; border:1px solid var(--bord);
+    border-radius:20px; padding:7px 14px; cursor:pointer;
+    font-size:0.85rem; font-weight:600; transition:all .2s;
+    user-select:none;
+  }
+  .radio-btn.active { background:var(--az); border-color:var(--az); color:white; }
+
+  .ppp-group { display:flex; gap:8px; }
+  .ppp-btn {
+    flex:1; text-align:center; padding:9px; border:1px solid var(--bord);
+    border-radius:7px; cursor:pointer; font-weight:600; font-size:0.9rem;
+    background:#F7F9FC; transition:all .2s; user-select:none;
+  }
+  .ppp-btn.active { background:var(--az); color:white; border-color:var(--az); }
+
+  .tabla-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  table { width:100%; border-collapse:collapse; font-size:0.8rem; min-width:700px; }
+  thead tr { background:var(--az); color:white; }
+  thead th { padding:8px 5px; text-align:center; font-size:0.72rem; white-space:nowrap; }
+  tbody tr:nth-child(even) { background:#F0F5FF; }
+  tbody td { padding:3px 2px; }
+  tbody td input {
+    width:100%; padding:6px 4px; border:1px solid var(--bord);
+    border-radius:4px; font-size:0.78rem; background:transparent;
+    color:var(--txt);
+  }
+  tbody td input:focus { outline:none; border-color:var(--az2); background:white; }
+  .td-num { text-align:center; color:var(--txt2); font-weight:700; padding:0 4px; min-width:22px; }
+
+  .btn {
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    padding:13px 20px; border:none; border-radius:9px;
+    font-size:0.95rem; font-weight:700; cursor:pointer;
+    transition:all .2s; width:100%; margin-bottom:10px;
+  }
+  .btn-primary { background:var(--az); color:white; }
+  .btn-primary:active { background:var(--az2); }
+  .btn-secondary { background:#E8ECF4; color:var(--txt); }
+  .btn-add {
+    background:#EEF3FB; color:var(--az); font-size:0.85rem;
+    padding:9px; margin-top:10px; border-radius:7px;
+    border:1px dashed var(--az2); width:100%; cursor:pointer;
+    font-weight:600;
+  }
+
+  #toast {
+    position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+    background:var(--green); color:white; padding:12px 24px;
+    border-radius:30px; font-weight:600; font-size:0.9rem;
+    box-shadow:0 4px 20px #0004; opacity:0; transition:opacity .3s;
+    pointer-events:none; z-index:999; white-space:nowrap;
+  }
+  #toast.show { opacity:1; }
+  #toast.error { background:var(--red); }
+
+  #spinner {
+    display:none; position:fixed; inset:0;
+    background:#0006; z-index:998; align-items:center; justify-content:center;
+  }
+  #spinner.show { display:flex; }
+  .spin-box { background:white; border-radius:14px; padding:30px 40px; text-align:center; }
+  .loader {
+    width:40px; height:40px; border:4px solid var(--bord);
+    border-top-color:var(--az); border-radius:50%;
+    animation:spin .8s linear infinite; margin:0 auto 12px;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  @media(max-width:480px) {
+    .grid-2 { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hdr-gold"></div>
+  <div class="hdr-inner">
+    <img src="/static/metasil_logo.png" alt="" onerror="this.style.display='none'">
+    <div class="hdr-title">
+      <h1>METASIL S.A.C.</h1>
+      <p>Planilla de Movilidad</p>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- Empleado -->
+  <div class="card">
+    <div class="card-header">👤 Datos del Empleado</div>
+    <div class="card-body">
+      <div style="margin-bottom:10px">
+        <div class="field" style="margin-bottom:10px">
+          <label>APELLIDOS Y NOMBRES *</label>
+          <input type="text" id="nombre" placeholder="Ingresa nombre completo">
+        </div>
+        <div class="grid-2">
+          <div class="field">
+            <label>DNI *</label>
+            <input type="text" id="dni" maxlength="8" placeholder="00000000">
+          </div>
+          <div class="field">
+            <label>RECIBO N° (automático)</label>
+            <div class="recibo-badge" id="recibo-badge">—</div>
+          </div>
+          <div class="field">
+            <label>CARGO *</label>
+            <input type="text" id="cargo" placeholder="Ej: Técnico">
+          </div>
+          <div class="field">
+            <label>FECHA EMISIÓN *</label>
+            <input type="date" id="fecha">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Movimientos -->
+  <div class="card">
+    <div class="card-header">📋 Movimientos</div>
+    <div class="card-body">
+      <div class="tabla-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Fecha</th>
+              <th>Cod.CC</th>
+              <th>Centro Costo</th>
+              <th>H.Salida</th>
+              <th>Pto.Partida</th>
+              <th>H.Llegada</th>
+              <th>Pto.Llegada</th>
+              <th>Detalle</th>
+              <th>Importe S/.</th>
+            </tr>
+          </thead>
+          <tbody id="tbody">
+            <!-- filas se insertan aquí -->
+          </tbody>
+        </table>
+      </div>
+      <button class="btn-add" onclick="addFila()">＋ Agregar fila</button>
+    </div>
+  </div>
+
+  <!-- Transporte -->
+  <div class="card">
+    <div class="card-header">🚌 Transporte</div>
+    <div class="card-body">
+      <div class="radio-group" id="transp-group">
+        <div class="radio-btn" onclick="selTransp(this,'TAXI')">🚕 TAXI</div>
+        <div class="radio-btn active" onclick="selTransp(this,'OMNIBUS')">🚌 OMNIBUS</div>
+        <div class="radio-btn" onclick="selTransp(this,'COLECTIVO')">🚐 COLECTIVO</div>
+        <div class="radio-btn" onclick="selTransp(this,'OTROS')">🚗 OTROS</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PPP -->
+  <div class="card">
+    <div class="card-header">⚙️ Planillas por página (PDF)</div>
+    <div class="card-body">
+      <div class="ppp-group">
+        <div class="ppp-btn" onclick="selPPP(this,1)">1 por página</div>
+        <div class="ppp-btn" onclick="selPPP(this,2)">2 por página</div>
+        <div class="ppp-btn active" onclick="selPPP(this,3)">3 por página</div>
+      </div>
+    </div>
+  </div>
+
+  <button class="btn btn-primary" onclick="generar()">🖨️ Generar y Descargar PDF</button>
+  <button class="btn btn-secondary" onclick="limpiar()">🗑️ Limpiar campos</button>
+
+</main>
+
+<div id="spinner">
+  <div class="spin-box">
+    <div class="loader"></div>
+    <p style="color:#1B3F6E;font-weight:600">Generando PDF...</p>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+var filaCount = 0;
+var transpActual = "OMNIBUS";
+var pppActual = 3;
+
+function addFila() {
+  if (filaCount >= 8) { toast("Máximo 8 filas", true); return; }
+  filaCount++;
+  var n = filaCount;
+  var tbody = document.getElementById("tbody");
+  var tr = document.createElement("tr");
+  tr.innerHTML =
+    '<td class="td-num">' + n + '</td>' +
+    '<td><input type="date" id="f_fecha_' + n + '"></td>' +
+    '<td><input type="text" id="f_cod_' + n + '" placeholder="CC"></td>' +
+    '<td><input type="text" id="f_centro_' + n + '" placeholder="Centro"></td>' +
+    '<td><input type="time" id="f_hsal_' + n + '"></td>' +
+    '<td><input type="text" id="f_psal_' + n + '" placeholder="Partida"></td>' +
+    '<td><input type="time" id="f_hlle_' + n + '"></td>' +
+    '<td><input type="text" id="f_plle_' + n + '" placeholder="Llegada"></td>' +
+    '<td><input type="text" id="f_det_' + n + '" placeholder="Descripcion"></td>' +
+    '<td><input type="number" id="f_imp_' + n + '" placeholder="0.00" step="0.01" min="0"></td>';
+  tbody.appendChild(tr);
+}
+
+function selTransp(el, val) {
+  transpActual = val;
+  var btns = document.querySelectorAll("#transp-group .radio-btn");
+  btns.forEach(function(b) { b.classList.remove("active"); });
+  el.classList.add("active");
+}
+
+function selPPP(el, val) {
+  pppActual = val;
+  var btns = document.querySelectorAll(".ppp-btn");
+  btns.forEach(function(b) { b.classList.remove("active"); });
+  el.classList.add("active");
+}
+
+function previewRecibo() {
+  var dni = document.getElementById("dni").value.trim();
+  var badge = document.getElementById("recibo-badge");
+  if (dni.length >= 7) {
+    fetch("/recibo_preview/" + dni)
+      .then(function(r) { return r.json(); })
+      .then(function(d) { badge.textContent = d.recibo; });
+  } else {
+    badge.textContent = "—";
+  }
+}
+
+document.getElementById("dni").addEventListener("input", previewRecibo);
+
+function toast(msg, err) {
+  var el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = "show" + (err ? " error" : "");
+  setTimeout(function() { el.className = ""; }, 3000);
+}
+
+function getVal(id) {
+  var el = document.getElementById(id);
+  return el ? el.value.trim() : "";
+}
+
+function generar() {
+  var nombre = getVal("nombre");
+  var dni    = getVal("dni");
+  var cargo  = getVal("cargo");
+  var fecha  = getVal("fecha");
+
+  if (!nombre || !dni || !cargo || !fecha) {
+    toast("Completa Nombre, DNI, Cargo y Fecha", true); return;
+  }
+
+  var filas = [];
+  for (var i = 1; i <= filaCount; i++) {
+    var f = {
+      fecha:         getVal("f_fecha_" + i),
+      cod_cc:        getVal("f_cod_" + i),
+      centro_costo:  getVal("f_centro_" + i),
+      hora_salida:   getVal("f_hsal_" + i),
+      punto_partida: getVal("f_psal_" + i),
+      hora_llegada:  getVal("f_hlle_" + i),
+      punto_llegada: getVal("f_plle_" + i),
+      detalle:       getVal("f_det_" + i),
+      importe:       parseFloat(getVal("f_imp_" + i)) || 0
+    };
+    var tieneAlgo = f.fecha || f.cod_cc || f.centro_costo || f.detalle || f.importe > 0;
+    if (tieneAlgo) filas.push(f);
+  }
+
+  if (filas.length === 0) {
+    toast("Agrega al menos una fila con datos", true); return;
+  }
+
+  var payload = {
+    nombre: nombre, dni: dni, cargo: cargo,
+    fecha_emision: fecha,
+    transporte: transpActual,
+    por_pagina: pppActual,
+    filas: filas
+  };
+
+  document.getElementById("spinner").classList.add("show");
+
+  fetch("/generar", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  })
+  .then(function(resp) {
+    if (!resp.ok) { throw new Error("Error del servidor"); }
+    return resp.blob();
+  })
+  .then(function(blob) {
+    var url = URL.createObjectURL(blob);
+    var a   = document.createElement("a");
+    a.href  = url;
+    a.download = "planilla_" + nombre + ".pdf";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    previewRecibo();
+    toast("PDF generado correctamente");
+  })
+  .catch(function(e) {
+    toast("Error: " + e.message, true);
+  })
+  .finally(function() {
+    document.getElementById("spinner").classList.remove("show");
+  });
+}
+
+function limpiar() {
+  document.getElementById("nombre").value = "";
+  document.getElementById("dni").value    = "";
+  document.getElementById("cargo").value  = "";
+  document.getElementById("fecha").value  = new Date().toISOString().split("T")[0];
+  document.getElementById("recibo-badge").textContent = "—";
+  document.getElementById("tbody").innerHTML = "";
+  filaCount = 0;
+  transpActual = "OMNIBUS";
+  document.querySelectorAll("#transp-group .radio-btn").forEach(function(b) { b.classList.remove("active"); });
+  document.querySelectorAll("#transp-group .radio-btn")[1].classList.add("active");
+  addFila(); addFila(); addFila();
+}
+
+// Inicializar
+document.getElementById("fecha").value = new Date().toISOString().split("T")[0];
+addFila();
+addFila();
+addFila();
+</script>
+</body>
+</html>
