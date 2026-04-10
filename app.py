@@ -1,19 +1,18 @@
 """
-Planilla de Movilidad - METASIL S.A.C. — Web App Flask
-pip install flask reportlab openpyxl
+Planilla de Movilidad - METASIL S.A.C. — Web App Flask + Google Sheets
+pip install flask reportlab openpyxl gspread google-auth
 """
 
-import os, csv, json
+import os, json, io
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
-import io
 
 try:
-    import openpyxl
-    from openpyxl.styles import Font, PatternFill, Alignment
-    EXCEL_OK = True
+    import gspread
+    from google.oauth2.service_account import Credentials
+    SHEETS_OK = True
 except ImportError:
-    EXCEL_OK = False
+    SHEETS_OK = False
 
 try:
     from reportlab.lib.pagesizes import A4
@@ -26,11 +25,7 @@ except ImportError:
 
 app = Flask(__name__)
 
-ARCHIVO_CSV        = "registros_movilidad.csv"
-ARCHIVO_XLSX       = "registros_movilidad.xlsx"
-ARCHIVO_CONTADORES = "contadores_recibo.json"
-
-# ── Colores ──
+# ── Colores PDF ──
 AZ    = "#1B3F6E"
 AZ2   = "#2B4F82"
 GOLD  = "#C8A84B"
@@ -39,31 +34,120 @@ TXT   = "#1A1A2E"
 TXT2  = "#5A6478"
 GREEN = "#1E7F4E"
 
+# ════════════════════════════════════════════════════════════════════════════
+# Google Sheets
+# ════════════════════════════════════════════════════════════════════════════
+SHEET_ID      = os.environ.get("SHEET_ID", "")       # ID de tu Google Sheet
+CREDS_JSON    = os.environ.get("GOOGLE_CREDS", "")   # contenido del JSON de credenciales
+SHEET_REGISTROS  = "Registros"
+SHEET_CONTADORES = "Contadores"
 
-# ════════════════════════════════════════════════════════════════════════════
-# Contadores
-# ════════════════════════════════════════════════════════════════════════════
+def get_sheets_client():
+    if not SHEETS_OK or not CREDS_JSON or not SHEET_ID:
+        return None, None
+    try:
+        info   = json.loads(CREDS_JSON)
+        scopes = ["https://spreadsheets.google.com/feeds",
+                  "https://www.googleapis.com/auth/drive"]
+        creds  = Credentials.from_service_account_info(info, scopes=scopes)
+        gc     = gspread.authorize(creds)
+        sh     = gc.open_by_key(SHEET_ID)
+        return gc, sh
+    except Exception as e:
+        print(f"Error Sheets: {e}")
+        return None, None
+
+def get_or_create_sheet(sh, nombre, headers=None):
+    try:
+        ws = sh.worksheet(nombre)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=nombre, rows=1000, cols=20)
+        if headers:
+            ws.append_row(headers)
+    return ws
+
+def guardar_en_sheets(datos):
+    _, sh = get_sheets_client()
+    if not sh:
+        return False
+    try:
+        hdrs = ["Recibo","Nombre","DNI","Cargo","Fecha Emision","Transporte",
+                "Fecha Mov","Cod CC","Centro Costo","H.Salida","Punto Partida",
+                "H.Llegada","Punto Llegada","Detalle","Importe"]
+        ws = get_or_create_sheet(sh, SHEET_REGISTROS, hdrs)
+        for fila in datos["filas"]:
+            ws.append_row([
+                datos["recibo"], datos["nombre"], datos["dni"],
+                datos["cargo"], datos["fecha_emision"], datos["transporte"],
+                fila.get("fecha",""), fila.get("cod_cc",""),
+                fila.get("centro_costo",""), fila.get("hora_salida",""),
+                fila.get("punto_partida",""), fila.get("hora_llegada",""),
+                fila.get("punto_llegada",""), fila.get("detalle",""),
+                float(fila.get("importe",0))
+            ])
+        return True
+    except Exception as e:
+        print(f"Error guardando registros: {e}")
+        return False
+
+def siguiente_recibo_sheets(dni: str) -> int:
+    _, sh = get_sheets_client()
+    if not sh:
+        # fallback local si no hay Sheets
+        return siguiente_recibo_local(dni)
+    try:
+        ws   = get_or_create_sheet(sh, SHEET_CONTADORES, ["DNI","Ultimo Recibo"])
+        data = ws.get_all_records()
+        for i, row in enumerate(data, start=2):
+            if str(row.get("DNI","")) == str(dni):
+                nuevo = int(row.get("Ultimo Recibo", 0)) + 1
+                ws.update_cell(i, 2, nuevo)
+                return nuevo
+        # No existe → crear
+        ws.append_row([dni, 1])
+        return 1
+    except Exception as e:
+        print(f"Error contador: {e}")
+        return siguiente_recibo_local(dni)
+
+def recibo_actual_sheets(dni: str) -> int:
+    _, sh = get_sheets_client()
+    if not sh:
+        return recibo_actual_local(dni)
+    try:
+        ws   = get_or_create_sheet(sh, SHEET_CONTADORES, ["DNI","Ultimo Recibo"])
+        data = ws.get_all_records()
+        for row in data:
+            if str(row.get("DNI","")) == str(dni):
+                return int(row.get("Ultimo Recibo", 0)) + 1
+        return 1
+    except Exception:
+        return recibo_actual_local(dni)
+
+# ── Fallback local (por si Sheets no está disponible) ──
+ARCHIVO_CONTADORES = "/tmp/contadores_recibo.json"
+
 def cargar_contadores():
     if os.path.exists(ARCHIVO_CONTADORES):
         try:
-            with open(ARCHIVO_CONTADORES, "r", encoding="utf-8") as f:
+            with open(ARCHIVO_CONTADORES,"r",encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
     return {}
 
 def guardar_contadores(c):
-    with open(ARCHIVO_CONTADORES, "w", encoding="utf-8") as f:
+    with open(ARCHIVO_CONTADORES,"w",encoding="utf-8") as f:
         json.dump(c, f, ensure_ascii=False, indent=2)
 
-def siguiente_recibo(dni: str) -> int:
+def siguiente_recibo_local(dni):
     c = cargar_contadores()
     n = c.get(dni, 0) + 1
     c[dni] = n
     guardar_contadores(c)
     return n
 
-def recibo_actual(dni: str) -> int:
+def recibo_actual_local(dni):
     return cargar_contadores().get(dni, 0) + 1
 
 
@@ -92,10 +176,9 @@ def dibujar_planilla(c, datos, ox, oy, ancho, alto):
     c.rect(ox, y_cab, ancho, cab_h, fill=1, stroke=0)
 
     logo = "static/metasil_logo.png"
-    logo_w = ancho * 0.22
     if os.path.exists(logo):
         c.drawImage(logo, ox+0.25*cm, y_cab+cab_h*0.1,
-                    width=logo_w, height=cab_h*0.8,
+                    width=ancho*0.22, height=cab_h*0.8,
                     preserveAspectRatio=True, mask="auto")
 
     sep1 = ox + ancho*0.26
@@ -158,8 +241,8 @@ def dibujar_planilla(c, datos, ox, oy, ancho, alto):
             t(p, cx, cy+off-j*0.22*cm, sz=6, bold=True, al="center", col=colors.white)
     for lb,ci,nc in [("SALIDA",3,2),("LLEGADA",5,2)]:
         span_w = sum(cw[ci:ci+nc])
-        cx = xc(ci)+span_w/2
-        t(lb, cx, y_tt-fh_c1/2-0.08*cm, sz=7, bold=True, al="center", col=colors.HexColor(GOLD))
+        t(lb, xc(ci)+span_w/2, y_tt-fh_c1/2-0.08*cm,
+          sz=7, bold=True, al="center", col=colors.HexColor(GOLD))
 
     c.setFillColor(colors.HexColor(AZ2))
     c.rect(ox, y_tt-fh_c1-fh_c2, ancho, fh_c2, fill=1, stroke=0)
@@ -223,20 +306,40 @@ def dibujar_planilla(c, datos, ox, oy, ancho, alto):
         tx += ancho * 0.22
 
     firma_h = alto * 0.22
-    y_fi    = y_obs - firma_h
     fw      = ancho / 3
-    ln(ox, y_fi, ox+ancho, y_fi, g=0.8, col=colors.HexColor(AZ))
+    ln(ox, y_obs-firma_h, ox+ancho, y_obs-firma_h, g=0.8, col=colors.HexColor(AZ))
     firmantes = [
-        ("Autorizado por:", "Gerente Finanzas",          "Sra. Reene Moya"),
-        ("Sustentado por:", "Trabajador:",                datos["nombre"]),
-        ("Revisado por:",   "Asistente Administración:", ""),
+        ("Autorizado por:", "Gerente Finanzas",          "Sra. Reene Moya",  None),
+        ("Sustentado por:", "Trabajador:",                datos["nombre"],    datos.get("firma_base64")),
+        ("Revisado por:",   "Asistente Administración:", "",                  None),
     ]
-    for i,(titulo,cargo_f,nombre) in enumerate(firmantes):
+    for i,(titulo,cargo_f,nombre,fimg_b64) in enumerate(firmantes):
         fx = ox + i*fw
         if i>0:
-            ln(fx, y_fi, fx, y_obs, g=0.4, col=colors.HexColor(BORDER))
+            ln(fx, y_obs-firma_h, fx, y_obs, g=0.4, col=colors.HexColor(BORDER))
         t(titulo, fx+0.3*cm, y_obs-firma_h*0.18, sz=7, bold=True, col=colors.HexColor(AZ))
         linea_y = y_obs - firma_h*0.55
+
+        # Dibujar firma desde base64
+        if fimg_b64:
+            try:
+                import base64
+                from reportlab.lib.utils import ImageReader
+                # Quitar prefijo data:image/...;base64,
+                if "," in fimg_b64:
+                    fimg_b64 = fimg_b64.split(",", 1)[1]
+                img_data = base64.b64decode(fimg_b64)
+                img_buf  = io.BytesIO(img_data)
+                img_w = fw - 0.6*cm
+                img_h = firma_h * 0.45
+                img_x = fx + (fw - img_w) / 2
+                img_y = linea_y + 0.05*cm
+                c.drawImage(ImageReader(img_buf), img_x, img_y,
+                            width=img_w, height=img_h,
+                            preserveAspectRatio=True, mask="auto")
+            except Exception as e:
+                print(f"Error firma: {e}")
+
         ln(fx+0.3*cm, linea_y, fx+fw-0.3*cm, linea_y, g=0.5, col=colors.HexColor("#888888"))
         t(cargo_f, fx+0.3*cm, linea_y-firma_h*0.18, sz=6.5, col=colors.HexColor(TXT2))
         if nombre:
@@ -248,13 +351,12 @@ def generar_pdf_bytes(lista_datos, por_pagina=3):
         return None
     buf = io.BytesIO()
     c   = rl_canvas.Canvas(buf, pagesize=A4)
-    W, H = A4
+    W, H  = A4
     mx, my    = 1.2*cm, 1.0*cm
     ancho     = W - 2*mx
     espacio_y = H - 2*my
     gap       = 0.35*cm
     alto_unit = (espacio_y - gap*(por_pagina-1)) / por_pagina
-
     idx = 0
     while idx < len(lista_datos):
         for slot in range(por_pagina):
@@ -270,48 +372,6 @@ def generar_pdf_bytes(lista_datos, por_pagina=3):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# CSV / Excel
-# ════════════════════════════════════════════════════════════════════════════
-def guardar_csv(datos):
-    hdrs = ["recibo","nombre","dni","cargo","fecha_emision","transporte",
-            "fecha","cod_cc","centro_costo","hora_salida","punto_partida",
-            "hora_llegada","punto_llegada","detalle","importe"]
-    existe = os.path.exists(ARCHIVO_CSV)
-    with open(ARCHIVO_CSV,"a",newline="",encoding="utf-8") as f:
-        wr = csv.DictWriter(f, fieldnames=hdrs)
-        if not existe: wr.writeheader()
-        for fila in datos["filas"]:
-            wr.writerow({"recibo":datos["recibo"],"nombre":datos["nombre"],
-                         "dni":datos["dni"],"cargo":datos["cargo"],
-                         "fecha_emision":datos["fecha_emision"],
-                         "transporte":datos["transporte"],**fila})
-
-def guardar_excel(datos):
-    if not EXCEL_OK: return
-    hdrs=["Recibo","Nombre","DNI","Cargo","Fecha","Transporte",
-          "Fecha Mov","Cod CC","Centro","H.Sal","Partida",
-          "H.Lle","Llegada","Detalle","Importe"]
-    if os.path.exists(ARCHIVO_XLSX):
-        wb=openpyxl.load_workbook(ARCHIVO_XLSX); ws=wb.active
-    else:
-        wb=openpyxl.Workbook(); ws=wb.active; ws.title="Movilidad"
-        for ci,h in enumerate(hdrs,1):
-            cell=ws.cell(row=1,column=ci,value=h)
-            cell.font=Font(bold=True,color="FFFFFF")
-            cell.fill=PatternFill("solid",fgColor="1B3F6E")
-            cell.alignment=Alignment(horizontal="center")
-    for fila in datos["filas"]:
-        ws.append([datos["recibo"],datos["nombre"],datos["dni"],
-                   datos["cargo"],datos["fecha_emision"],datos["transporte"],
-                   fila.get("fecha",""),fila.get("cod_cc",""),
-                   fila.get("centro_costo",""),fila.get("hora_salida",""),
-                   fila.get("punto_partida",""),fila.get("hora_llegada",""),
-                   fila.get("punto_llegada",""),fila.get("detalle",""),
-                   float(fila.get("importe",0))])
-    wb.save(ARCHIVO_XLSX)
-
-
-# ════════════════════════════════════════════════════════════════════════════
 # Rutas Flask
 # ════════════════════════════════════════════════════════════════════════════
 @app.route("/")
@@ -320,7 +380,7 @@ def index():
 
 @app.route("/recibo_preview/<dni>")
 def recibo_preview(dni):
-    return jsonify({"recibo": recibo_actual(dni)})
+    return jsonify({"recibo": recibo_actual_sheets(dni)})
 
 @app.route("/generar", methods=["POST"])
 def generar():
@@ -329,12 +389,13 @@ def generar():
         return jsonify({"error": "Sin datos"}), 400
 
     dni        = datos.get("dni","").strip()
-    num_recibo = siguiente_recibo(dni)
+    num_recibo = siguiente_recibo_sheets(dni)
     datos["recibo"] = str(num_recibo)
 
-    guardar_csv(datos)
-    guardar_excel(datos)
+    # Guardar en Google Sheets
+    guardar_en_sheets(datos)
 
+    # Generar PDF
     por_pagina = int(datos.get("por_pagina", 3))
     buf = generar_pdf_bytes([datos], por_pagina=por_pagina)
     if not buf:
@@ -347,7 +408,5 @@ def generar():
 
 
 if __name__ == "__main__":
-    os.makedirs("static", exist_ok=True)
-    os.makedirs("templates", exist_ok=True)
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
