@@ -1,6 +1,5 @@
 flask
 reportlab
-openpyxl
-pillow
 gunicorn
-
+requests
+pillow
