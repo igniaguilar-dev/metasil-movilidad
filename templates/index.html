@@ -1,440 +1,412 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<meta name="theme-color" content="#1B3F6E">
-<title>Planilla de Movilidad - METASIL</title>
-<style>
-  :root {
-    --az:#1B3F6E; --az2:#2B5EA7; --gold:#C8A84B;
-    --bg:#F4F6FA; --card:#FFFFFF; --bord:#D0D7E3;
-    --txt:#1A1A2E; --txt2:#5A6478; --green:#1E7F4E; --red:#C0392B;
-  }
-  * { box-sizing:border-box; margin:0; padding:0; }
-  body { font-family:'Segoe UI',sans-serif; background:var(--bg); color:var(--txt); }
+"""
+Planilla de Movilidad - METASIL S.A.C. — Web App Flask + Google Sheets
+pip install flask reportlab openpyxl gspread google-auth
+"""
 
-  header { background:var(--az); position:sticky; top:0; z-index:100; box-shadow:0 2px 8px #0004; }
-  .hdr-gold { background:var(--gold); height:4px; }
-  .hdr-inner { display:flex; align-items:center; gap:12px; padding:12px 16px; }
-  .hdr-inner img { height:36px; }
-  .hdr-title h1 { color:var(--gold); font-size:1rem; font-weight:700; }
-  .hdr-title p  { color:#ffffffaa; font-size:0.75rem; }
+import os, json, io
+from datetime import datetime
+from flask import Flask, render_template, request, jsonify, send_file
 
-  main { max-width:700px; margin:0 auto; padding:16px; }
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    SHEETS_OK = True
+except ImportError:
+    SHEETS_OK = False
 
-  .card { background:var(--card); border:1px solid var(--bord); border-radius:10px; margin-bottom:16px; overflow:hidden; }
-  .card-header { background:var(--az); color:white; padding:10px 14px; font-size:0.85rem; font-weight:600; }
-  .card-body { padding:14px; }
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import cm
+    from reportlab.pdfgen import canvas as rl_canvas
+    PDF_OK = True
+except ImportError:
+    PDF_OK = False
 
-  .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-  .field { display:flex; flex-direction:column; gap:4px; }
-  .field label { font-size:0.75rem; color:var(--txt2); font-weight:600; }
-  .field input, .field select {
-    padding:9px 10px; border:1px solid var(--bord); border-radius:7px;
-    font-size:0.9rem; background:#F7F9FC; color:var(--txt); width:100%;
-  }
-  .field input:focus { outline:none; border-color:var(--az2); box-shadow:0 0 0 2px #2B5EA722; }
-  .recibo-badge {
-    display:inline-block; background:#E8F0FE; color:var(--az);
-    font-weight:700; font-size:1.1rem; padding:8px 14px;
-    border-radius:7px; border:1px solid var(--az2); min-width:60px; text-align:center;
-  }
+app = Flask(__name__)
 
-  .radio-group { display:flex; flex-wrap:wrap; gap:8px; }
-  .radio-btn {
-    display:flex; align-items:center; gap:6px;
-    background:#F0F5FF; border:1px solid var(--bord);
-    border-radius:20px; padding:7px 14px; cursor:pointer;
-    font-size:0.85rem; font-weight:600; transition:all .2s;
-    user-select:none;
-  }
-  .radio-btn.active { background:var(--az); border-color:var(--az); color:white; }
+# ── Colores PDF ──
+AZ    = "#1B3F6E"
+AZ2   = "#2B4F82"
+GOLD  = "#C8A84B"
+BORDER= "#D0D7E3"
+TXT   = "#1A1A2E"
+TXT2  = "#5A6478"
+GREEN = "#1E7F4E"
 
-  .ppp-group { display:flex; gap:8px; }
-  .ppp-btn {
-    flex:1; text-align:center; padding:9px; border:1px solid var(--bord);
-    border-radius:7px; cursor:pointer; font-weight:600; font-size:0.9rem;
-    background:#F7F9FC; transition:all .2s; user-select:none;
-  }
-  .ppp-btn.active { background:var(--az); color:white; border-color:var(--az); }
+# ════════════════════════════════════════════════════════════════════════════
+# Google Sheets
+# ════════════════════════════════════════════════════════════════════════════
+SHEET_ID      = os.environ.get("SHEET_ID", "")       # ID de tu Google Sheet
+CREDS_JSON    = os.environ.get("GOOGLE_CREDS", "")   # contenido del JSON de credenciales
+SHEET_REGISTROS  = "Registros"
+SHEET_CONTADORES = "Contadores"
 
-  .tabla-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
-  table { width:100%; border-collapse:collapse; font-size:0.8rem; min-width:700px; }
-  thead tr { background:var(--az); color:white; }
-  thead th { padding:8px 5px; text-align:center; font-size:0.72rem; white-space:nowrap; }
-  tbody tr:nth-child(even) { background:#F0F5FF; }
-  tbody td { padding:3px 2px; }
-  tbody td input {
-    width:100%; padding:6px 4px; border:1px solid var(--bord);
-    border-radius:4px; font-size:0.78rem; background:transparent;
-    color:var(--txt);
-  }
-  tbody td input:focus { outline:none; border-color:var(--az2); background:white; }
-  .td-num { text-align:center; color:var(--txt2); font-weight:700; padding:0 4px; min-width:22px; }
+def get_sheets_client():
+    if not SHEETS_OK or not CREDS_JSON or not SHEET_ID:
+        return None, None
+    try:
+        info   = json.loads(CREDS_JSON)
+        scopes = ["https://spreadsheets.google.com/feeds",
+                  "https://www.googleapis.com/auth/drive"]
+        creds  = Credentials.from_service_account_info(info, scopes=scopes)
+        gc     = gspread.authorize(creds)
+        sh     = gc.open_by_key(SHEET_ID)
+        return gc, sh
+    except Exception as e:
+        print(f"Error Sheets: {e}")
+        return None, None
 
-  .btn {
-    display:flex; align-items:center; justify-content:center; gap:8px;
-    padding:13px 20px; border:none; border-radius:9px;
-    font-size:0.95rem; font-weight:700; cursor:pointer;
-    transition:all .2s; width:100%; margin-bottom:10px;
-  }
-  .btn-primary { background:var(--az); color:white; }
-  .btn-primary:active { background:var(--az2); }
-  .btn-secondary { background:#E8ECF4; color:var(--txt); }
-  .btn-add {
-    background:#EEF3FB; color:var(--az); font-size:0.85rem;
-    padding:9px; margin-top:10px; border-radius:7px;
-    border:1px dashed var(--az2); width:100%; cursor:pointer;
-    font-weight:600;
-  }
+def get_or_create_sheet(sh, nombre, headers=None):
+    try:
+        ws = sh.worksheet(nombre)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=nombre, rows=1000, cols=20)
+        if headers:
+            ws.append_row(headers)
+    return ws
 
-  #toast {
-    position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
-    background:var(--green); color:white; padding:12px 24px;
-    border-radius:30px; font-weight:600; font-size:0.9rem;
-    box-shadow:0 4px 20px #0004; opacity:0; transition:opacity .3s;
-    pointer-events:none; z-index:999; white-space:nowrap;
-  }
-  #toast.show { opacity:1; }
-  #toast.error { background:var(--red); }
+def guardar_en_sheets(datos):
+    _, sh = get_sheets_client()
+    if not sh:
+        return False
+    try:
+        hdrs = ["Recibo","Nombre","DNI","Cargo","Fecha Emision","Transporte",
+                "Fecha Mov","Cod CC","Centro Costo","H.Salida","Punto Partida",
+                "H.Llegada","Punto Llegada","Detalle","Importe"]
+        ws = get_or_create_sheet(sh, SHEET_REGISTROS, hdrs)
+        for fila in datos["filas"]:
+            ws.append_row([
+                datos["recibo"], datos["nombre"], datos["dni"],
+                datos["cargo"], datos["fecha_emision"], datos["transporte"],
+                fila.get("fecha",""), fila.get("cod_cc",""),
+                fila.get("centro_costo",""), fila.get("hora_salida",""),
+                fila.get("punto_partida",""), fila.get("hora_llegada",""),
+                fila.get("punto_llegada",""), fila.get("detalle",""),
+                float(fila.get("importe",0))
+            ])
+        return True
+    except Exception as e:
+        print(f"Error guardando registros: {e}")
+        return False
 
-  #spinner {
-    display:none; position:fixed; inset:0;
-    background:#0006; z-index:998; align-items:center; justify-content:center;
-  }
-  #spinner.show { display:flex; }
-  .spin-box { background:white; border-radius:14px; padding:30px 40px; text-align:center; }
-  .loader {
-    width:40px; height:40px; border:4px solid var(--bord);
-    border-top-color:var(--az); border-radius:50%;
-    animation:spin .8s linear infinite; margin:0 auto 12px;
-  }
-  @keyframes spin { to { transform:rotate(360deg); } }
+def siguiente_recibo_sheets(dni: str) -> int:
+    _, sh = get_sheets_client()
+    if not sh:
+        # fallback local si no hay Sheets
+        return siguiente_recibo_local(dni)
+    try:
+        ws   = get_or_create_sheet(sh, SHEET_CONTADORES, ["DNI","Ultimo Recibo"])
+        data = ws.get_all_records()
+        for i, row in enumerate(data, start=2):
+            if str(row.get("DNI","")) == str(dni):
+                nuevo = int(row.get("Ultimo Recibo", 0)) + 1
+                ws.update_cell(i, 2, nuevo)
+                return nuevo
+        # No existe → crear
+        ws.append_row([dni, 1])
+        return 1
+    except Exception as e:
+        print(f"Error contador: {e}")
+        return siguiente_recibo_local(dni)
 
-  @media(max-width:480px) {
-    .grid-2 { grid-template-columns:1fr; }
-  }
-</style>
-</head>
-<body>
+def recibo_actual_sheets(dni: str) -> int:
+    _, sh = get_sheets_client()
+    if not sh:
+        return recibo_actual_local(dni)
+    try:
+        ws   = get_or_create_sheet(sh, SHEET_CONTADORES, ["DNI","Ultimo Recibo"])
+        data = ws.get_all_records()
+        for row in data:
+            if str(row.get("DNI","")) == str(dni):
+                return int(row.get("Ultimo Recibo", 0)) + 1
+        return 1
+    except Exception:
+        return recibo_actual_local(dni)
 
-<header>
-  <div class="hdr-gold"></div>
-  <div class="hdr-inner">
-    <img src="/static/metasil_logo.png" alt="" onerror="this.style.display='none'">
-    <div class="hdr-title">
-      <h1>METASIL S.A.C.</h1>
-      <p>Planilla de Movilidad</p>
-    </div>
-  </div>
-</header>
+# ── Fallback local (por si Sheets no está disponible) ──
+ARCHIVO_CONTADORES = "/tmp/contadores_recibo.json"
 
-<main>
+def cargar_contadores():
+    if os.path.exists(ARCHIVO_CONTADORES):
+        try:
+            with open(ARCHIVO_CONTADORES,"r",encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
 
-  <!-- Empleado -->
-  <div class="card">
-    <div class="card-header">👤 Datos del Empleado</div>
-    <div class="card-body">
-      <div style="margin-bottom:10px">
-        <div class="field" style="margin-bottom:10px">
-          <label>APELLIDOS Y NOMBRES *</label>
-          <input type="text" id="nombre" placeholder="Ingresa nombre completo">
-        </div>
-        <div class="grid-2">
-          <div class="field">
-            <label>DNI *</label>
-            <input type="text" id="dni" maxlength="8" placeholder="00000000">
-          </div>
-          <div class="field">
-            <label>RECIBO N° (automático)</label>
-            <div class="recibo-badge" id="recibo-badge">—</div>
-          </div>
-          <div class="field">
-            <label>CARGO *</label>
-            <input type="text" id="cargo" placeholder="Ej: Técnico">
-          </div>
-          <div class="field">
-            <label>FECHA EMISIÓN *</label>
-            <input type="date" id="fecha">
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+def guardar_contadores(c):
+    with open(ARCHIVO_CONTADORES,"w",encoding="utf-8") as f:
+        json.dump(c, f, ensure_ascii=False, indent=2)
 
-  <!-- Movimientos -->
-  <div class="card">
-    <div class="card-header">📋 Movimientos</div>
-    <div class="card-body">
-      <div class="tabla-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Fecha</th>
-              <th>Cod.CC</th>
-              <th>Centro Costo</th>
-              <th>H.Salida</th>
-              <th>Pto.Partida</th>
-              <th>H.Llegada</th>
-              <th>Pto.Llegada</th>
-              <th>Detalle</th>
-              <th>Importe S/.</th>
-            </tr>
-          </thead>
-          <tbody id="tbody">
-            <!-- filas se insertan aquí -->
-          </tbody>
-        </table>
-      </div>
-      <button class="btn-add" onclick="addFila()">＋ Agregar fila</button>
-    </div>
-  </div>
+def siguiente_recibo_local(dni):
+    c = cargar_contadores()
+    n = c.get(dni, 0) + 1
+    c[dni] = n
+    guardar_contadores(c)
+    return n
 
-  <!-- Firma -->
-  <div class="card">
-    <div class="card-header">✍️ Tu Firma Digital</div>
-    <div class="card-body">
-      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
-        <button class="btn-add" style="width:auto; padding:9px 18px;"
-                onclick="document.getElementById('firma-input').click()">
-          📂 Seleccionar firma (PNG/JPG)
-        </button>
-        <span id="firma-nombre" style="color:var(--txt2); font-size:0.85rem; font-style:italic;">
-          Sin seleccionar
-        </span>
-        <input type="file" id="firma-input" accept="image/png,image/jpeg"
-               style="display:none" onchange="cargarFirma(this)">
-      </div>
-      <!-- Preview de la firma -->
-      <div id="firma-preview" style="display:none; margin-top:12px;">
-        <img id="firma-img" style="max-height:80px; max-width:250px;
-             border:1px solid var(--bord); border-radius:7px; padding:6px; background:white;">
-        <button onclick="quitarFirma()" style="margin-left:10px; background:var(--red);
-                color:white; border:none; border-radius:5px; padding:4px 10px;
-                cursor:pointer; font-size:0.8rem;">✕ Quitar</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Transporte -->
-  <div class="card">
-    <div class="card-header">🚌 Transporte</div>
-    <div class="card-body">
-      <div class="radio-group" id="transp-group">
-        <div class="radio-btn" onclick="selTransp(this,'TAXI')">🚕 TAXI</div>
-        <div class="radio-btn active" onclick="selTransp(this,'OMNIBUS')">🚌 OMNIBUS</div>
-        <div class="radio-btn" onclick="selTransp(this,'COLECTIVO')">🚐 COLECTIVO</div>
-        <div class="radio-btn" onclick="selTransp(this,'OTROS')">🚗 OTROS</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- PPP -->
-  <div class="card">
-    <div class="card-header">⚙️ Planillas por página (PDF)</div>
-    <div class="card-body">
-      <div class="ppp-group">
-        <div class="ppp-btn" onclick="selPPP(this,1)">1 por página</div>
-        <div class="ppp-btn" onclick="selPPP(this,2)">2 por página</div>
-        <div class="ppp-btn active" onclick="selPPP(this,3)">3 por página</div>
-      </div>
-    </div>
-  </div>
-
-  <button class="btn btn-primary" onclick="generar()">🖨️ Generar y Descargar PDF</button>
-  <button class="btn btn-secondary" onclick="limpiar()">🗑️ Limpiar campos</button>
-
-</main>
-
-<div id="spinner">
-  <div class="spin-box">
-    <div class="loader"></div>
-    <p style="color:#1B3F6E;font-weight:600">Generando PDF...</p>
-  </div>
-</div>
-<div id="toast"></div>
-
-<script>
-var firmaBase64 = null;
-
-function cargarFirma(input) {
-  var file = input.files[0];
-  if (!file) return;
-  var reader = new FileReader();
-  reader.onload = function(e) {
-    firmaBase64 = e.target.result;
-    document.getElementById("firma-nombre").textContent = "✅ " + file.name;
-    document.getElementById("firma-nombre").style.color = "var(--green)";
-    document.getElementById("firma-img").src = firmaBase64;
-    document.getElementById("firma-preview").style.display = "block";
-  };
-  reader.readAsDataURL(file);
-}
-
-function quitarFirma() {
-  firmaBase64 = null;
-  document.getElementById("firma-input").value = "";
-  document.getElementById("firma-nombre").textContent = "Sin seleccionar";
-  document.getElementById("firma-nombre").style.color = "var(--txt2)";
-  document.getElementById("firma-preview").style.display = "none";
-}
+def recibo_actual_local(dni):
+    return cargar_contadores().get(dni, 0) + 1
 
 
-var transpActual = "OMNIBUS";
-var pppActual = 3;
+# ════════════════════════════════════════════════════════════════════════════
+# PDF
+# ════════════════════════════════════════════════════════════════════════════
+def dibujar_planilla(c, datos, ox, oy, ancho, alto):
+    def ln(x1,y1,x2,y2,g=0.5,col=colors.black):
+        c.setStrokeColor(col); c.setLineWidth(g); c.line(x1,y1,x2,y2)
 
-function addFila() {
-  if (filaCount >= 8) { toast("Máximo 8 filas", true); return; }
-  filaCount++;
-  var n = filaCount;
-  var tbody = document.getElementById("tbody");
-  var tr = document.createElement("tr");
-  tr.innerHTML =
-    '<td class="td-num">' + n + '</td>' +
-    '<td><input type="date" id="f_fecha_' + n + '"></td>' +
-    '<td><input type="text" id="f_cod_' + n + '" placeholder="CC"></td>' +
-    '<td><input type="text" id="f_centro_' + n + '" placeholder="Centro"></td>' +
-    '<td><input type="time" id="f_hsal_' + n + '"></td>' +
-    '<td><input type="text" id="f_psal_' + n + '" placeholder="Partida"></td>' +
-    '<td><input type="time" id="f_hlle_' + n + '"></td>' +
-    '<td><input type="text" id="f_plle_' + n + '" placeholder="Llegada"></td>' +
-    '<td><input type="text" id="f_det_' + n + '" placeholder="Descripcion"></td>' +
-    '<td><input type="number" id="f_imp_' + n + '" placeholder="0.00" step="0.01" min="0"></td>';
-  tbody.appendChild(tr);
-}
+    def t(s,x,y,sz=7,bold=False,al="left",col=colors.HexColor(TXT)):
+        c.setFillColor(col)
+        c.setFont("Helvetica-Bold" if bold else "Helvetica", sz)
+        s = str(s)
+        if al=="center": c.drawCentredString(x,y,s)
+        elif al=="right": c.drawRightString(x,y,s)
+        else: c.drawString(x,y,s)
 
-function selTransp(el, val) {
-  transpActual = val;
-  var btns = document.querySelectorAll("#transp-group .radio-btn");
-  btns.forEach(function(b) { b.classList.remove("active"); });
-  el.classList.add("active");
-}
+    yb = oy - alto
+    c.setStrokeColor(colors.HexColor(AZ)); c.setLineWidth(1)
+    c.rect(ox, yb, ancho, alto, fill=0, stroke=1)
 
-function selPPP(el, val) {
-  pppActual = val;
-  var btns = document.querySelectorAll(".ppp-btn");
-  btns.forEach(function(b) { b.classList.remove("active"); });
-  el.classList.add("active");
-}
+    cab_h = alto * 0.13
+    y_cab = oy - cab_h
+    c.setFillColor(colors.white)
+    c.rect(ox, y_cab, ancho, cab_h, fill=1, stroke=0)
 
-function previewRecibo() {
-  var dni = document.getElementById("dni").value.trim();
-  var badge = document.getElementById("recibo-badge");
-  if (dni.length >= 7) {
-    fetch("/recibo_preview/" + dni)
-      .then(function(r) { return r.json(); })
-      .then(function(d) { badge.textContent = d.recibo; });
-  } else {
-    badge.textContent = "—";
-  }
-}
+    logo = "static/metasil_logo.png"
+    if os.path.exists(logo):
+        c.drawImage(logo, ox+0.25*cm, y_cab+cab_h*0.1,
+                    width=ancho*0.22, height=cab_h*0.8,
+                    preserveAspectRatio=True, mask="auto")
 
-document.getElementById("dni").addEventListener("input", previewRecibo);
+    sep1 = ox + ancho*0.26
+    sep2 = ox + ancho*0.82
+    for sx in (sep1, sep2):
+        ln(sx, y_cab, sx, oy, g=0.7, col=colors.HexColor(AZ))
 
-function toast(msg, err) {
-  var el = document.getElementById("toast");
-  el.textContent = msg;
-  el.className = "show" + (err ? " error" : "");
-  setTimeout(function() { el.className = ""; }, 3000);
-}
+    mid_x = (sep1 + sep2) / 2
+    t("PLANILLA DE MOVILIDAD", mid_x, y_cab+cab_h*0.58,
+      sz=12, bold=True, al="center", col=colors.HexColor(AZ))
+    t("INGENIERÍA DE PROCESOS METALÚRGICOS", mid_x, y_cab+cab_h*0.22,
+      sz=6, al="center", col=colors.HexColor(TXT2))
+    t("RECIBO N°", sep2+0.2*cm, y_cab+cab_h*0.65, sz=6.5, col=colors.HexColor(TXT2))
+    t(str(datos.get("recibo","1")), sep2+0.2*cm, y_cab+cab_h*0.2,
+      sz=14, bold=True, col=colors.HexColor(AZ))
 
-function getVal(id) {
-  var el = document.getElementById(id);
-  return el ? el.value.trim() : "";
-}
+    gold_h = alto * 0.008
+    c.setFillColor(colors.HexColor(GOLD))
+    c.rect(ox, y_cab-gold_h, ancho, gold_h, fill=1, stroke=0)
 
-function generar() {
-  var nombre = getVal("nombre");
-  var dni    = getVal("dni");
-  var cargo  = getVal("cargo");
-  var fecha  = getVal("fecha");
+    dat_h = alto * 0.10
+    y_dat = y_cab - gold_h - dat_h
+    c.setFillColor(colors.HexColor("#EEF2FA"))
+    c.rect(ox, y_dat, ancho, dat_h, fill=1, stroke=0)
+    ln(ox, y_dat, ox+ancho, y_dat, g=0.5, col=colors.HexColor(BORDER))
 
-  if (!nombre || !dni || !cargo || !fecha) {
-    toast("Completa Nombre, DNI, Cargo y Fecha", true); return;
-  }
+    y1 = y_cab - gold_h - dat_h*0.32
+    y2 = y_cab - gold_h - dat_h*0.72
+    t("APELLIDOS Y NOMBRES:", ox+0.3*cm, y1, sz=7, bold=True, col=colors.HexColor(AZ))
+    t(datos["nombre"], ox+4.5*cm, y1, sz=7.5)
+    t("DNI:", ox+0.3*cm, y2, sz=7, bold=True, col=colors.HexColor(AZ))
+    t(datos["dni"], ox+1.5*cm, y2, sz=7.5)
+    mid = ox + ancho*0.58
+    t("FECHA:", mid, y1, sz=7, bold=True, col=colors.HexColor(AZ))
+    t(datos["fecha_emision"], mid+1.3*cm, y1, sz=7.5)
+    t("CARGO:", mid, y2, sz=7, bold=True, col=colors.HexColor(AZ))
+    t(datos["cargo"], mid+1.3*cm, y2, sz=7.5)
 
-  var filas = [];
-  for (var i = 1; i <= filaCount; i++) {
-    var f = {
-      fecha:         getVal("f_fecha_" + i),
-      cod_cc:        getVal("f_cod_" + i),
-      centro_costo:  getVal("f_centro_" + i),
-      hora_salida:   getVal("f_hsal_" + i),
-      punto_partida: getVal("f_psal_" + i),
-      hora_llegada:  getVal("f_hlle_" + i),
-      punto_llegada: getVal("f_plle_" + i),
-      detalle:       getVal("f_det_" + i),
-      importe:       parseFloat(getVal("f_imp_" + i)) || 0
-    };
-    var tieneAlgo = f.fecha || f.cod_cc || f.centro_costo || f.detalle || f.importe > 0;
-    if (tieneAlgo) filas.push(f);
-  }
+    cw_rel = [2.20,1.25,2.30,1.20,2.00,1.20,2.20,4.80,1.85]
+    tot_rel = sum(cw_rel)
+    cw = [r/tot_rel*ancho for r in cw_rel]
+    def xc(i): return ox + sum(cw[:i])
 
-  if (filas.length === 0) {
-    toast("Agrega al menos una fila con datos", true); return;
-  }
+    n_rows  = max(len(datos["filas"]), 3)
+    fh_c1   = alto * 0.048
+    fh_c2   = alto * 0.044
+    fh_row  = alto * 0.062
+    tabla_h = fh_c1 + fh_c2 + fh_row*n_rows
+    y_tt    = y_dat
+    y_tb    = y_tt - tabla_h
 
-  var payload = {
-    nombre: nombre, dni: dni, cargo: cargo,
-    fecha_emision: fecha,
-    transporte: transpActual,
-    por_pagina: pppActual,
-    firma_base64: firmaBase64,
-    filas: filas
-  };
+    c.setFillColor(colors.HexColor(AZ))
+    c.rect(ox, y_tt-fh_c1, ancho, fh_c1, fill=1, stroke=0)
+    for lb,i in [("N° / FECHA",0),("COD.\nCC",1),("CENTRO DE\nCOSTO",2),("DETALLE",7),("IMPORTE\nTOTAL",8)]:
+        cx = xc(i)+cw[i]/2
+        cy = y_tt - fh_c1/2 - 0.06*cm
+        lines = lb.split("\n")
+        off = (len(lines)-1)*0.11*cm/2
+        for j,p in enumerate(lines):
+            t(p, cx, cy+off-j*0.22*cm, sz=6, bold=True, al="center", col=colors.white)
+    for lb,ci,nc in [("SALIDA",3,2),("LLEGADA",5,2)]:
+        span_w = sum(cw[ci:ci+nc])
+        t(lb, xc(ci)+span_w/2, y_tt-fh_c1/2-0.08*cm,
+          sz=7, bold=True, al="center", col=colors.HexColor(GOLD))
 
-  document.getElementById("spinner").classList.add("show");
+    c.setFillColor(colors.HexColor(AZ2))
+    c.rect(ox, y_tt-fh_c1-fh_c2, ancho, fh_c2, fill=1, stroke=0)
+    for i,lb in {3:"HORA",4:"PUNTO PARTIDA",5:"HORA",6:"PUNTO DE LLEGADA"}.items():
+        t(lb, xc(i)+cw[i]/2, y_tt-fh_c1-fh_c2/2-0.08*cm,
+          sz=5.5, bold=True, al="center", col=colors.HexColor("#D0E4FF"))
 
-  fetch("/generar", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  })
-  .then(function(resp) {
-    if (!resp.ok) { throw new Error("Error del servidor"); }
-    return resp.blob();
-  })
-  .then(function(blob) {
-    var url = URL.createObjectURL(blob);
-    var a   = document.createElement("a");
-    a.href  = url;
-    a.download = "planilla_" + nombre + ".pdf";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    previewRecibo();
-    toast("PDF generado correctamente");
-  })
-  .catch(function(e) {
-    toast("Error: " + e.message, true);
-  })
-  .finally(function() {
-    document.getElementById("spinner").classList.remove("show");
-  });
-}
+    y_r = y_tt - fh_c1 - fh_c2
+    for idx in range(n_rows):
+        bg = colors.white if idx%2==0 else colors.HexColor("#F0F5FF")
+        c.setFillColor(bg)
+        c.rect(ox, y_r-fh_row, ancho, fh_row, fill=1, stroke=0)
+        ln(ox, y_r-fh_row, ox+ancho, y_r-fh_row, g=0.3, col=colors.HexColor(BORDER))
+        for i in range(1,len(cw)):
+            ln(xc(i), y_r-fh_row, xc(i), y_r, g=0.3, col=colors.HexColor(BORDER))
+        if idx < len(datos["filas"]):
+            f = datos["filas"][idx]
+            vals = [
+                f"{idx+1}  {f.get('fecha','')}",
+                f.get("cod_cc",""), f.get("centro_costo",""),
+                f.get("hora_salida",""), f.get("punto_partida",""),
+                f.get("hora_llegada",""), f.get("punto_llegada",""),
+                f.get("detalle",""), f"{float(f.get('importe',0)):.2f}"
+            ]
+            for i,v in enumerate(vals):
+                al = "right" if i==8 else ("center" if i in(0,3,5) else "left")
+                px = xc(i)+cw[i]-0.1*cm if al=="right" else \
+                     xc(i)+cw[i]/2 if al=="center" else xc(i)+0.12*cm
+                t(v, px, y_r-fh_row/2-0.08*cm, sz=7, al=al)
+        y_r -= fh_row
 
-function limpiar() {
-  document.getElementById("nombre").value = "";
-  document.getElementById("dni").value    = "";
-  document.getElementById("cargo").value  = "";
-  document.getElementById("fecha").value  = new Date().toISOString().split("T")[0];
-  document.getElementById("recibo-badge").textContent = "—";
-  document.getElementById("tbody").innerHTML = "";
-  filaCount = 0;
-  transpActual = "OMNIBUS";
-  document.querySelectorAll("#transp-group .radio-btn").forEach(function(b) { b.classList.remove("active"); });
-  document.querySelectorAll("#transp-group .radio-btn")[1].classList.add("active");
-  addFila(); addFila(); addFila();
-}
+    c.setStrokeColor(colors.HexColor(AZ)); c.setLineWidth(0.7)
+    c.rect(ox, y_tb, ancho, tabla_h, fill=0, stroke=1)
 
-// Inicializar
-document.getElementById("fecha").value = new Date().toISOString().split("T")[0];
-addFila();
-addFila();
-addFila();
-</script>
-</body>
-</html>
+    tot_h = alto * 0.055
+    y_tot = y_tb - tot_h
+    c.setFillColor(colors.HexColor("#EEF3FB"))
+    c.rect(ox, y_tot, ancho, tot_h, fill=1, stroke=0)
+    ln(ox, y_tot, ox+ancho, y_tot, g=0.8, col=colors.HexColor(AZ))
+    total = sum(float(f.get("importe",0)) for f in datos["filas"])
+    t("TOTAL S/.", ox+ancho-cw[8]-2.2*cm, y_tb-tot_h/2-0.08*cm,
+      sz=7.5, bold=True, col=colors.HexColor(AZ))
+    t(f"{total:.2f}", ox+ancho-0.12*cm, y_tb-tot_h/2-0.08*cm,
+      sz=9, bold=True, al="right", col=colors.HexColor(GREEN))
+
+    obs_h = alto * 0.075
+    y_obs = y_tot - obs_h
+    c.setFillColor(colors.HexColor("#FAFBFF"))
+    c.rect(ox, y_obs, ancho, obs_h, fill=1, stroke=0)
+    ln(ox, y_obs, ox+ancho, y_obs, g=0.4, col=colors.HexColor(BORDER))
+    t("OBSERVACIONES: Marcar con aspa (x) el medio usado",
+      ox+0.3*cm, y_tot-obs_h*0.32, sz=7, bold=True, col=colors.HexColor(AZ))
+    sel = datos.get("transporte","OMNIBUS")
+    tx  = ox + 0.4*cm
+    for tr in ["TAXI","OMNIBUS","COLECTIVO","OTROS"]:
+        c.setStrokeColor(colors.HexColor(AZ)); c.setLineWidth(0.6)
+        c.rect(tx, y_tot-obs_h*0.78, 0.28*cm, 0.28*cm, fill=0)
+        if sel==tr:
+            t("X", tx+0.02*cm, y_tot-obs_h*0.72, sz=7.5, bold=True, col=colors.HexColor(AZ))
+        t(tr, tx+0.38*cm, y_tot-obs_h*0.72, sz=7)
+        tx += ancho * 0.22
+
+    firma_h = alto * 0.22
+    fw      = ancho / 3
+    ln(ox, y_obs-firma_h, ox+ancho, y_obs-firma_h, g=0.8, col=colors.HexColor(AZ))
+    firmantes = [
+        ("Autorizado por:", "Gerente Finanzas",          "Sra. Reene Moya",  None),
+        ("Sustentado por:", "Trabajador:",                datos["nombre"],    datos.get("firma_base64")),
+        ("Revisado por:",   "Asistente Administración:", "",                  None),
+    ]
+    for i,(titulo,cargo_f,nombre,fimg_b64) in enumerate(firmantes):
+        fx = ox + i*fw
+        if i>0:
+            ln(fx, y_obs-firma_h, fx, y_obs, g=0.4, col=colors.HexColor(BORDER))
+        t(titulo, fx+0.3*cm, y_obs-firma_h*0.18, sz=7, bold=True, col=colors.HexColor(AZ))
+        linea_y = y_obs - firma_h*0.55
+
+        # Dibujar firma desde base64
+        if fimg_b64:
+            try:
+                import base64
+                from reportlab.lib.utils import ImageReader
+                # Quitar prefijo data:image/...;base64,
+                if "," in fimg_b64:
+                    fimg_b64 = fimg_b64.split(",", 1)[1]
+                img_data = base64.b64decode(fimg_b64)
+                img_buf  = io.BytesIO(img_data)
+                img_w = fw - 0.6*cm
+                img_h = firma_h * 0.45
+                img_x = fx + (fw - img_w) / 2
+                img_y = linea_y + 0.05*cm
+                c.drawImage(ImageReader(img_buf), img_x, img_y,
+                            width=img_w, height=img_h,
+                            preserveAspectRatio=True, mask="auto")
+            except Exception as e:
+                print(f"Error firma: {e}")
+
+        ln(fx+0.3*cm, linea_y, fx+fw-0.3*cm, linea_y, g=0.5, col=colors.HexColor("#888888"))
+        t(cargo_f, fx+0.3*cm, linea_y-firma_h*0.18, sz=6.5, col=colors.HexColor(TXT2))
+        if nombre:
+            t(nombre, fx+0.3*cm, linea_y-firma_h*0.36, sz=6.5, bold=True)
+
+
+def generar_pdf_bytes(lista_datos, por_pagina=3):
+    if not PDF_OK:
+        return None
+    buf = io.BytesIO()
+    c   = rl_canvas.Canvas(buf, pagesize=A4)
+    W, H  = A4
+    mx, my    = 1.2*cm, 1.0*cm
+    ancho     = W - 2*mx
+    espacio_y = H - 2*my
+    gap       = 0.35*cm
+    alto_unit = (espacio_y - gap*(por_pagina-1)) / por_pagina
+    idx = 0
+    while idx < len(lista_datos):
+        for slot in range(por_pagina):
+            if idx >= len(lista_datos): break
+            oy = H - my - slot*(alto_unit+gap)
+            dibujar_planilla(c, lista_datos[idx], mx, oy, ancho, alto_unit)
+            idx += 1
+        if idx < len(lista_datos):
+            c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Rutas Flask
+# ════════════════════════════════════════════════════════════════════════════
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+@app.route("/recibo_preview/<dni>")
+def recibo_preview(dni):
+    return jsonify({"recibo": recibo_actual_sheets(dni)})
+
+@app.route("/generar", methods=["POST"])
+def generar():
+    datos = request.get_json()
+    if not datos:
+        return jsonify({"error": "Sin datos"}), 400
+
+    dni        = datos.get("dni","").strip()
+    num_recibo = siguiente_recibo_sheets(dni)
+    datos["recibo"] = str(num_recibo)
+
+    # Guardar en Google Sheets
+    guardar_en_sheets(datos)
+
+    # Generar PDF
+    por_pagina = int(datos.get("por_pagina", 3))
+    buf = generar_pdf_bytes([datos], por_pagina=por_pagina)
+    if not buf:
+        return jsonify({"error": "reportlab no instalado"}), 500
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return send_file(buf, mimetype="application/pdf",
+                     as_attachment=True,
+                     download_name=f"planilla_{datos['nombre']}_{ts}.pdf")
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
