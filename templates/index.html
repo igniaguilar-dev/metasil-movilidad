@@ -250,8 +250,34 @@
     </div>
   </div>
 
-  <button class="btn btn-primary" onclick="generar()">🖨️ Generar y Descargar PDF</button>
-  <button class="btn btn-secondary" onclick="limpiar()">🗑️ Limpiar campos</button>
+  <!-- Cola -->
+  <div class="card">
+    <div class="card-header">📦 Cola de Planillas</div>
+    <div class="card-body">
+      <div id="cola-badge" style="
+        background:#EEF3FB; border:1px solid var(--az2); border-radius:8px;
+        padding:10px 14px; font-size:0.9rem; color:var(--az);
+        font-weight:600; margin-bottom:10px; text-align:center;">
+        Cola: 0 planilla(s)
+      </div>
+      <button class="btn btn-primary" onclick="agregarCola()" style="margin-bottom:8px">
+        ➕ Agregar a la cola
+      </button>
+      <button class="btn" style="background:#E8ECF4;color:var(--txt);margin-bottom:8px"
+              onclick="limpiar()">
+        🗑️ Limpiar campos
+      </button>
+    </div>
+  </div>
+
+  <button class="btn btn-primary" onclick="imprimirTodas()"
+          style="background:#1E7F4E; font-size:1rem; padding:15px">
+    🖨️ Imprimir todas (PDF)
+  </button>
+  <button class="btn" onclick="vaciarCola()"
+          style="background:#FDECEA; color:#C0392B; margin-bottom:20px">
+    🗑️ Vaciar cola
+  </button>
 
 </main>
 
@@ -357,8 +383,22 @@ function getVal(id) {
   return el ? el.value.trim() : "";
 }
 
-// ── Generar PDF ──
-function generar() {
+var cola = [];
+
+function actualizarBadgeCola() {
+  var badge = document.getElementById("cola-badge");
+  if (cola.length === 0) {
+    badge.style.background = "#EEF3FB";
+    badge.style.color      = "var(--az)";
+    badge.textContent      = "Cola: 0 planilla(s)";
+  } else {
+    badge.style.background = "#E8F5E9";
+    badge.style.color      = "var(--green)";
+    badge.textContent      = "✅ Cola: " + cola.length + " planilla(s)";
+  }
+}
+
+function recolectar() {
   var nombre = getVal("nombre");
   var dni    = getVal("dni");
   var cargo  = getVal("cargo");
@@ -366,7 +406,7 @@ function generar() {
 
   if (!nombre || !dni || !cargo || !fecha) {
     toast("Completa Nombre, DNI, Cargo y Fecha", true);
-    return;
+    return null;
   }
 
   var filas = [];
@@ -389,10 +429,10 @@ function generar() {
 
   if (filas.length === 0) {
     toast("Agrega al menos una fila con datos", true);
-    return;
+    return null;
   }
 
-  var payload = {
+  return {
     nombre:        nombre,
     dni:           dni,
     cargo:         cargo,
@@ -402,13 +442,39 @@ function generar() {
     firma_base64:  firmaBase64,
     filas:         filas
   };
+}
+
+function agregarCola() {
+  var datos = recolectar();
+  if (!datos) return;
+  cola.push(datos);
+  actualizarBadgeCola();
+  toast("✅ '" + datos.nombre + "' agregado a la cola");
+  limpiar();
+}
+
+function vaciarCola() {
+  if (cola.length === 0) {
+    toast("La cola ya está vacía", true); return;
+  }
+  if (confirm("¿Eliminar las " + cola.length + " planilla(s) de la cola?")) {
+    cola = [];
+    actualizarBadgeCola();
+    toast("Cola vaciada");
+  }
+}
+
+function imprimirTodas() {
+  if (cola.length === 0) {
+    toast("Agrega al menos una planilla a la cola primero", true); return;
+  }
 
   document.getElementById("spinner").classList.add("show");
 
-  fetch("/generar", {
+  fetch("/generar_cola", {
     method:  "POST",
     headers: { "Content-Type": "application/json" },
-    body:    JSON.stringify(payload)
+    body:    JSON.stringify({ planillas: cola, por_pagina: pppActual })
   })
   .then(function(resp) {
     if (!resp.ok) throw new Error("Error del servidor");
@@ -418,13 +484,14 @@ function generar() {
     var url = URL.createObjectURL(blob);
     var a   = document.createElement("a");
     a.href  = url;
-    a.download = "planilla_" + nombre + ".pdf";
+    a.download = "planillas_metasil_" + Date.now() + ".pdf";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    previewRecibo();
-    toast("PDF generado correctamente");
+    toast("✅ " + cola.length + " planilla(s) generadas");
+    cola = [];
+    actualizarBadgeCola();
   })
   .catch(function(e) {
     toast("Error: " + e.message, true);
@@ -433,6 +500,8 @@ function generar() {
     document.getElementById("spinner").classList.remove("show");
   });
 }
+
+
 
 // ── Limpiar ──
 function limpiar() {

@@ -390,6 +390,34 @@ def generar():
                      download_name=f"planilla_{datos['nombre']}_{ts}.pdf")
 
 
-if __name__ == "__main__":
+@app.route("/generar_cola", methods=["POST"])
+def generar_cola():
+    body = request.get_json()
+    if not body:
+        return jsonify({"error": "Sin datos"}), 400
+
+    planillas  = body.get("planillas", [])
+    por_pagina = int(body.get("por_pagina", 3))
+
+    if not planillas:
+        return jsonify({"error": "Cola vacía"}), 400
+
+    # Asignar recibo y guardar cada planilla
+    for datos in planillas:
+        dni             = datos.get("dni","").strip()
+        datos["recibo"] = str(siguiente_recibo_supabase(dni))
+        guardar_en_supabase(datos)
+
+    buf = generar_pdf_bytes(planillas, por_pagina=por_pagina)
+    if not buf:
+        return jsonify({"error": "reportlab no instalado"}), 500
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return send_file(buf, mimetype="application/pdf",
+                     as_attachment=True,
+                     download_name=f"planillas_metasil_{ts}.pdf")
+
+
+
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
